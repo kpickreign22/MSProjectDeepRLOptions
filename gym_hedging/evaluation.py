@@ -4,35 +4,70 @@ from tqdm import tqdm
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import torch
+import numpy as np
+from tabulate import tabulate
+
 
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.algorithms import Algorithm
 from gym_hedging.utils.simulators import GBMSimulator, BinomialTreeOptionSimulator
 
+class NaiveDeltaHedgingAgent:
+    def __init__(self, option_price_model):
+        self.option_price_model = option_price_model
+        self.delta = 0
 
-config = PPOConfig().environment(env=DeltaHedging).rollouts(num_rollout_workers=2).framework("torch").training(model={"fcnet_hiddens": [64, 64]})
+    def get_delta(self, asset_price, h=0.1):
+        asset_price1 = asset_price + h
+        option_price1 = self.option_price_model.compute_price([asset_price1], stay_at_current_step=True)
+        asset_price2 = asset_price - h
+        option_price2 = self.option_price_model.compute_price([asset_price2], stay_at_current_step=True)
+        delta_numerical = (option_price2 - option_price1) / (asset_price2 - asset_price1)
+        return delta_numerical
+
+    def takeAction(self, state):
+        asset_price, _, _, _, _ = state
+        self.delta = self.get_delta(asset_price*100)
+        return self.delta
+
+
+config = (  # 1. Configure the algorithm,
+    PPOConfig()
+    .environment(env = DeltaHedging)
+    .rollouts(num_rollout_workers=2)
+    .framework("torch")
+    .training(model={"fcnet_hiddens": [64, 64]}, vf_loss_coeff=0.5,  # This is c1, the coefficient for the value function loss
+        entropy_coeff=0.2 )
+    .evaluation(evaluation_num_workers=1, evaluation_interval=5, evaluation_duration=10)
+)
+
 algo = config.build()
 env = DeltaHedging()
 
+naiveAgent = NaiveDeltaHedgingAgent(option_price_model=env.option_price_model)
 
-checkpoint_path = "/Users/kellypickreign/Desktop/MSDRL/MSProjectDeepRLOptions/gym_hedging/gym_hedging/checkpoints2"
+
+checkpoint_path = "/Users/kellypickreign/Desktop/MSDRL/MSProjectDeepRLOptions/gym_hedging/gym_hedging/checkpoints3"
 algo.restore(checkpoint_path)
 
-n_episodes = 1
+n_episodes = 50
+
+portVal = []
 
 for episode in range(n_episodes):
     action_list = []
     BSM_delta_list = []
+    RL_agent_pos = []
     asset_pnl = []
     option_pnl = []
+    test_list = []
 
     state, _ = env.reset()
     done = False
     episode_reward = 0
     initial_option = env.option_price_model.compute_price([env.S_0])
-
+    start = 0
     while not done:
-
         # print(state)
 
         if not isinstance(state, torch.Tensor):
@@ -42,43 +77,83 @@ for episode in range(n_episodes):
                 state = state.unsqueeze(0)
         # Compute action using the trained model
         action = algo.compute_single_action(state)
+        # print(state)
+        # action = naiveAgent.takeAction(state)
 
-        action_list.append(action*100)
+        # This is the amount to trade, the current stock position is N state[2]
+        action_list.append(action)
         BSM_delta_list.append(env.BSMDelta[0]*100)
+        RL_agent_pos.append(env.getN(env.state)/100+50)
+        update =((env.getN(env.state)/100+50) - start) * env.get_stock_price(state)[0]
+        # update = (action - start) * env.get_stock_price(state)
+
+        start = env.getN(env.state)/100+50
+        # portVal.append(env.get_port_val(env.state))
+        portVal.append(update)
+
+        new = action
+        # test_list.append(new - old)
+        # old = new
+        # BSM_delta_policy.append(env.BSMDelta[0]*100 - #previousdelta*100)
         asset_pnl.append(env.get_stock_price(state)[0])
-        print("This")
-        print(env.get_stock_price(state))
+        # print("This")
+        # print(env.get_stock_price(state))
         current_option = env.option_price_model.compute_price([env.get_stock_price(env.state)])
         option_pnl.append(initial_option-current_option)
         
-        print(f"Action taken: {action}")
+        # print(f"Action taken: {action}")
         
         # Step through the environment using the action
         next_state, reward, done, _, _ = env.step(action)
         episode_reward += reward
         state = next_state
     
-    print(f"Total reward for episode {episode + 1}: {episode_reward}")
+    # print(f"Total reward for episode {episode + 1}: {episode_reward}")
+    print( f"Episode num: {episode}")
 
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(action_list, label='Agent Actions')
-    plt.plot(BSM_delta_list, label='BSM Delta Values', linestyle='--')
-    plt.plot(asset_pnl, label='Asset Price')
-    plt.plot(option_pnl, label='Option PnL')
-    plt.xlabel('Time step')
-    plt.ylabel('Value')
-    plt.title(f'Actions and BSM Delta for PPO')
-    plt.legend()
-    plt.show()
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(action_list, label='Agent Actions')
-    plt.xlabel('Time step')
-    plt.ylabel('Value')
-    plt.title(f'Actions for PPO')
-    plt.legend()
-    plt.show()
+
+    # plt.figure(figsize=(10, 5))
+    # plt.plot(RL_agent_pos, label='Agent Actions')
+    # plt.plot(BSM_delta_list, label='BSM Delta Values', linestyle='--')
+    # plt.plot(asset_pnl, label='Asset Price')
+    # plt.plot(option_pnl, label='Option PnL')
+    # plt.xlabel('Time step')
+    # plt.ylabel('Value')
+    # plt.title(f'Actions and BSM Delta for PPO')
+    # plt.legend()
+    # plt.show()
+
+    # plt.figure(figsize=(10, 5))
+    # plt.plot(action_list, label='Agent Actions')
+    # plt.xlabel('Time step')
+    # plt.ylabel('Value')
+    # plt.title(f'Actions for PPO')
+    # plt.legend()
+    # plt.show()
+
+
+print(f"Port Val list: {portVal}")
+stats_array1 = [np.mean(portVal), np.std(portVal), np.min(portVal), np.max(portVal)]
+
+table_data = [
+    ['Statistic', 'Agent', 'Agent'],
+    ['Mean', stats_array1[0]],
+    ['Std Dev', stats_array1[1]],
+    ['Min', stats_array1[2], ],
+    ['Max', stats_array1[3], ],
+]
+
+print(tabulate(table_data, headers='firstrow', tablefmt='fancy_grid'))
+
+    # plt.figure(figsize=(10, 5))
+    # plt.plot(test_list, label='Agent Actions')
+    # plt.xlabel('Time step')
+    # plt.ylabel('Value')
+    # plt.title(f'new and old')
+    # plt.legend()
+    # plt.show()
 
 
 

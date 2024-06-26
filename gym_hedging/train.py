@@ -21,12 +21,13 @@ from ray import tune
 # tune.register_env('DeltaHedging-v0', create_environment)
 # print("after tune")
 
-config = (  # 1. Configure the algorithm,
+config = (  
     PPOConfig()
     .environment(env = DeltaHedging)
     .rollouts(num_rollout_workers=2)
     .framework("torch")
-    .training(model={"fcnet_hiddens": [64, 64]})
+    .training(model={"fcnet_hiddens": [64, 64]}, vf_loss_coeff=0.5,  
+        entropy_coeff=0.2 )
     .evaluation(evaluation_num_workers=1, evaluation_interval=5, evaluation_duration=10)
 )
 
@@ -37,11 +38,11 @@ algo = config.build()  # 2. build the algorithm,
 print("done build")
 
 # Number of training iterations.
-num_iterations = 10
+num_iterations = 2000
 # Interval at which to perform evaluations.
-eval_interval = 5
+eval_interval = 100
 
-checkpoint_path = "gym_hedging/checkpoints2"
+checkpoint_path = "gym_hedging/checkpoints4"
 
 training_rewards = []
 evaluation_rewards = []

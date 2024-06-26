@@ -25,13 +25,15 @@ class DeltaHedging(gym.Env):
         self.state = np.zeros((5))
 
         self.set_stock_price(self.S_0)
-        print(f"This is the initial stock price {self.state[0]}")
+        # print(f"This is the initial stock price {self.state[0]}")
         self.set_ttm(self.T)
+        #Initial number of holdings is zero for RL agent 
         self.setN(0)
         self.state[3] = self.K
 
 
-        self.action_space = spaces.Box(low=-np.inf, high=np.inf, shape=(1,), dtype=np.float32)
+        # Choosing the amount of underlyer to trade, assuming one option contract of 100 shares
+        self.action_space = spaces.Box(low=-100, high=100, shape=(1,), dtype=np.float32)
         self.observation_space = spaces.Box(low=np.array([-np.inf, -np.inf, -np.inf, -np.inf, -np.inf]), high=np.array([np.inf, np.inf, np.inf, np.inf, np.inf]), shape=(5,), dtype=np.float32)
 
 
@@ -68,40 +70,56 @@ class DeltaHedging(gym.Env):
                                                 self.sigma,
                                                 self.K, self.r)
         
-        print(f"From start BSM delta: {self.BSMDelta}")
+        # print(f"From start BSM delta: {self.BSMDelta}")
+
+
 
 
     def step(self, action):
-        delta = action[0]
+        # The action that the RL agent choses is the number of shares to be traded, so the delta value is 
+        # previous number of shares + action /100
+        
+        # num_traded = action[0]
+        num_traded = action
+
         prev_state = self.state.copy()
         prev_stock_price = self.get_stock_price(prev_state)
         prev_option_value = self.option
         next_stock_price = self.asset_price_model()[-1]
-        print(f"This is the next asset price: {next_stock_price}")
+        # print(f"This is the next asset price: {next_stock_price}")
         next_option_value = self.option_price_model.compute_price([self.get_stock_price(self.state)])
 
         truncated = False
         info = {}
 
-
-
         prev_portfolio_value = self.get_port_val(prev_state)
+
+        #good
         prev_delta = self.getN(prev_state)/100
+        delta = (self.getN(prev_state) + num_traded)/100
 
         self.BSMDelta = BSM_call_option.delta(self.get_stock_price(self.state),
                                                 self.get_ttm(self.state),
                                                 self.sigma,
                                                 self.K, self.r)
-        print(f"From step BSM delta: {self.BSMDelta}")
+        # print(f"From step BSM delta: {self.BSMDelta}")
 
         self.set_stock_price(next_stock_price)
         self.set_ttm(self.get_ttm(prev_state) - self.dt)
-        self.setN(self.getN(prev_state) + 100*delta)
+        self.setN(self.getN(prev_state) + num_traded)
+        self.state[3] = self.K
 
-        transaction_costs = self.transaction_cost * np.abs((delta - prev_delta)) * prev_stock_price
+        transaction_costs = self.transaction_cost * 100 * np.abs((delta - prev_delta)) * prev_stock_price
+        # transaction_costs = self.transaction_cost * num_traded * prev_stock_price
 
-        next_portfolio_val = delta * next_stock_price + (1 + self.r * self.dt) * (
-                prev_portfolio_value - delta * prev_stock_price - transaction_costs)
+        # next_portfolio_val = delta * next_stock_price + (1 + self.r * self.dt) * (
+        #         prev_portfolio_value - delta * prev_stock_price - transaction_costs)
+
+        next_portfolio_val = num_traded * next_stock_price + (1 + self.r * self.dt) * (
+                prev_portfolio_value - num_traded * prev_stock_price - transaction_costs)
+        
+        # next_portfolio_val = num_traded * next_stock_price + (1 + self.r * self.dt) * (
+        #         prev_portfolio_value - transaction_costs)
 
         self.set_port_val(next_portfolio_val)
         # self.set_moneyness(np.log(next_stock_price / self.K))
@@ -118,7 +136,7 @@ class DeltaHedging(gym.Env):
         # self.update_state_features()
         info = {"truncated": False}
 
-        print(self.state)
+        # print(self.state)
 
         return self.state, reward, done, truncated, info
 
@@ -137,12 +155,7 @@ class DeltaHedging(gym.Env):
         reward = PnL - (self.kappa / 2) * (PnL ** 2)
         if np.isclose(self.get_ttm(self.state), 0) or intrinsic_value > time_value:
             reward += intrinsic_value  # Encourage exercising if intrinsic > time value
-            # print("added")
 
-        # print(f"change option value {change_option_value}")
-        # print(f"change portfolio value {change_portfolio_value}")
-        # print(f"PnL {PnL}")
-        # print(f"reward {reward}")
         return reward
 
 
@@ -192,6 +205,7 @@ class DeltaHedging(gym.Env):
         self.state[1] = ttm
 
     def setN(self, N):
+        # print(f"setting Number of holdings to: {N}")
         self.state[2] = N
 
     def set_port_val(self, port_val):
