@@ -3,7 +3,7 @@ import numpy as np
 from gymnasium import spaces
 from scipy.stats import norm
 
-from gym_hedging.utils import GBMSimulator, BinomialTreeOptionSimulator, SimpleGBMSim, SimpleBTSim
+from utils import GBMSimulator, BinomialTreeOptionSimulator, SimpleGBMSim, SimpleBTSim
 
 class DeltaHedgingEnv(gym.Env):
 
